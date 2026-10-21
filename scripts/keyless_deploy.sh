@@ -115,7 +115,7 @@ SIMULATION_OUTPUT=$("${MEGA_EVME_CMD[@]}" tx \
 echo "$SIMULATION_OUTPUT" | head -20
 
 # Check execution status
-STATUS=$(echo "$SIMULATION_OUTPUT" | sed -n 's/.*Status:[[:space:]]\+\([^[:space:]]\+\).*/\1/p')
+STATUS=$(echo "$SIMULATION_OUTPUT" | sed -nE 's/.*Status:[[:space:]]+([^[:space:]]+).*/\1/p')
 if [ "$STATUS" != "Success" ]; then
     echo "ERROR: Simulation failed with status: $STATUS"
     echo "Full output:"
@@ -132,6 +132,10 @@ DEPLOYED_ADDR=$(echo "$RECEIPT_JSON" | jq -r '.contractAddress // empty')
 INITIAL_BALANCE="1000000000000000000000"  # 1000 ether in wei
 SIGNER_LOWER=$(echo "$SIGNER" | tr '[:upper:]' '[:lower:]')
 FINAL_BALANCE_HEX=$(jq -r "to_entries[] | select(.key | ascii_downcase == \"$SIGNER_LOWER\") | .value.balance" "$DUMP_FILE")
+if [ -z "$FINAL_BALANCE_HEX" ] || [ "$FINAL_BALANCE_HEX" = "null" ]; then
+    echo "ERROR: signer $SIGNER not found in state dump"
+    exit 1
+fi
 FINAL_BALANCE=$(python3 -c "print(int('$FINAL_BALANCE_HEX', 16))")
 BALANCE_SPENT=$(python3 -c "print($INITIAL_BALANCE - $FINAL_BALANCE)")
 
