@@ -8,7 +8,7 @@
 # Environment variables:
 #   PRIVATE_KEY  - Private key of a funded account (required)
 #   RPC_URL      - RPC endpoint (default: http://localhost:8545)
-#   MEGA_EVME    - Path to mega-evme binary (default: mega-evme from PATH)
+#   MEGA_EVME    - Path to mega-evme binary, or a command with arguments (default: mega-evme from PATH)
 #   FUND_MARGIN  - Extra wei to fund above simulated cost (default: 0)
 
 KEYLESS_TX="${1:?Usage: PRIVATE_KEY=<key> $0 <keyless-tx-hex>}"
@@ -102,7 +102,7 @@ echo "--- Step 3: Simulating with mega-evme ---"
 DUMP_FILE=$(mktemp)
 trap "rm -f $DUMP_FILE" EXIT
 
-SIMULATION_OUTPUT=$("$MEGA_EVME" tx \
+SIMULATION_OUTPUT=$("${MEGA_EVME_CMD[@]}" tx \
     "0x${KEYLESS_TX}" \
     --fork --fork.rpc "$RPC_URL" \
     --sender.balance 1000ether \
