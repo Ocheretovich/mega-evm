@@ -28,10 +28,14 @@ for cmd in cast jq python3; do
     fi
 done
 
-# Check mega-evme binary separately (handle args)
-MEGA_EVME_BIN=${MEGA_EVME%% *}
-if ! command -v "$MEGA_EVME_BIN" &>/dev/null; then
-    MISSING+=("$MEGA_EVME_BIN")
+# Check mega-evme. MEGA_EVME may be a path (spaces allowed) or a command with arguments.
+if command -v "$MEGA_EVME" &>/dev/null; then
+    MEGA_EVME_CMD=("$MEGA_EVME")
+else
+    read -ra MEGA_EVME_CMD <<< "$MEGA_EVME"
+    if [ ${#MEGA_EVME_CMD[@]} -eq 0 ] || ! command -v "${MEGA_EVME_CMD[0]}" &>/dev/null; then
+        MISSING+=("${MEGA_EVME_CMD[0]:-$MEGA_EVME}")
+    fi
 fi
 
 if [ ${#MISSING[@]} -ne 0 ]; then
