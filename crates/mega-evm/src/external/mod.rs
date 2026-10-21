@@ -20,6 +20,8 @@ use core::fmt::Debug;
 
 mod factory;
 mod gas;
+#[cfg(any(test, feature = "test-utils"))]
+mod hasher;
 mod oracle;
 mod salt;
 #[cfg(any(test, feature = "test-utils"))]
@@ -27,6 +29,8 @@ mod test_utils;
 
 pub use factory::*;
 pub use gas::*;
+#[cfg(any(test, feature = "test-utils"))]
+pub use hasher::*;
 pub use oracle::*;
 pub use salt::*;
 #[cfg(any(test, feature = "test-utils"))]
@@ -88,5 +92,23 @@ impl ExternalEnvFactory for EmptyExternalEnv {
 
     fn external_envs(&self, _block: BlockNumber) -> ExternalEnvs<Self::EnvTypes> {
         ExternalEnvs { salt_env: *self, oracle_env: *self }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{OracleEnv, SaltEnv, MIN_BUCKET_SIZE};
+    use alloy_primitives::{Address, Bytes, B256, U256};
+
+    #[test]
+    fn test_empty_external_env_factory_returns_minimum_bucket_and_no_oracle() {
+        let envs = EmptyExternalEnv.external_envs(42);
+
+        assert_eq!(envs.salt_env.get_bucket_capacity(123).unwrap(), MIN_BUCKET_SIZE as u64);
+        assert_eq!(envs.oracle_env.get_oracle_storage(U256::from(7)), None);
+        envs.oracle_env.on_hint(Address::ZERO, B256::ZERO, Bytes::new());
+        assert_eq!(<EmptyExternalEnv as SaltEnv>::bucket_id_for_account(Address::ZERO), 0);
+        assert_eq!(<EmptyExternalEnv as SaltEnv>::bucket_id_for_slot(Address::ZERO, U256::ZERO), 0);
     }
 }

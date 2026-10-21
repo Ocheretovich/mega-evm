@@ -45,15 +45,18 @@ impl ComputeGasTracker {
     pub(crate) fn new(spec: MegaSpecId, tx_limit: u64) -> Self {
         Self {
             detained_limit: tx_limit,
-            frame_tracker: FrameLimitTracker::new(tx_limit),
+            frame_tracker: FrameLimitTracker::new(spec, tx_limit),
             rex1_enabled: spec.is_enabled(MegaSpecId::REX1),
             rex4_enabled: spec.is_enabled(MegaSpecId::REX4),
         }
     }
 
     /// Pushes a new frame onto the tracker.
-    /// In Rex4+, uses the 98/100 budget-based limit derived from parent's remaining budget.
-    /// In pre-Rex4, pushes with `u64::MAX` since TX-level enforcement only.
+    ///
+    /// - **Rex4+ top-level**: budget = `tx_entry.remaining()` (accounts for intrinsic compute gas
+    ///   already recorded before the first frame is pushed).
+    /// - **Rex4+ nested**: budget = parent's remaining × 98/100 (generic behavior).
+    /// - **Pre-Rex4**: `u64::MAX` (TX-level enforcement only).
     fn push_frame(&mut self) {
         if self.rex4_enabled {
             self.frame_tracker.push_frame(());
@@ -114,17 +117,41 @@ impl ComputeGasTracker {
         used > self.detained_limit && self.detained_limit < self.frame_tracker.tx_limit()
     }
 
+    /// Caps the current (top) frame's compute gas budget.
+    ///
+    /// Used by the **REX4 legacy** `STORAGE_CALL_STIPEND` path: the child's total gas
+    /// (`gas_limit`) is inflated by `STORAGE_CALL_STIPEND`, but compute gas must remain
+    /// bounded at the original `forwarded_gas + CALL_STIPEND` so the extra storage stipend
+    /// cannot be spent on compute opcodes. This method tightens the per-frame compute gas
+    /// limit to enforce that cap.
+    ///
+    /// REX5+ does not call this method: under the separated-allowance model the child's
+    /// `gas.limit()` is never inflated, so the per-frame compute budget already equals the
+    /// pre-inflation amount naturally.
+    pub(crate) fn cap_current_frame_limit(&mut self, cap: u64) {
+        if let Some(frame) = self.frame_tracker.frame_mut() {
+            frame.limit = frame.limit.min(cap);
+        }
+    }
+
     /// Records compute gas as persistent usage in the current frame.
     /// If no frame exists (before `frame_init` or after last frame pop),
     /// records to the `tx_entry`.
     ///
     /// Compute gas is always persistent because CPU cycles cannot be undone.
+    #[inline]
     pub(crate) fn record_gas_used(&mut self, gas: u64) {
-        if let Some(entry) = self.frame_tracker.frame_mut() {
-            entry.persistent_usage += gas;
-        } else {
-            self.frame_tracker.tx_mut().persistent_usage += gas;
+        if !self.frame_tracker.add_frame_persistent(gas) {
+            self.frame_tracker.add_tx_persistent(gas);
         }
+    }
+
+    /// Merges external persistent usage into the TX-level entry.
+    ///
+    /// Used by `KeylessDeploy` (REX5+) to propagate sandbox compute gas consumption
+    /// back to the parent transaction.
+    pub(crate) fn merge_persistent_usage(&mut self, amount: u64) {
+        self.frame_tracker.add_tx_persistent(amount);
     }
 }
 
@@ -214,5 +241,30 @@ impl TxRuntimeLimit for ComputeGasTracker {
     fn before_frame_return_result<const LAST_FRAME: bool>(&mut self, result: &FrameResult) {
         assert!(LAST_FRAME || self.frame_tracker.has_active_frame(), "frame stack is empty");
         self.frame_tracker.pop_frame(result.instruction_result().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Usage exactly equal to the detained limit must NOT count as a detained exceed:
+    /// the predicate is strictly-greater-than (`used > detained_limit`), not `>=`.
+    #[test]
+    fn test_is_detained_exceed_is_strict_at_boundary() {
+        // tx_limit = 100, detained lowered to 50 (< tx_limit, so detention is binding).
+        let mut tracker = ComputeGasTracker::new(MegaSpecId::MINI_REX, 100);
+        tracker.set_detained_limit(50);
+
+        // Usage exactly at the detained limit: not exceeded.
+        tracker.record_gas_used(50);
+        assert!(
+            !tracker.is_detained_exceed(),
+            "usage == detained_limit must not be a detained exceed"
+        );
+
+        // One unit over the limit: exceeded.
+        tracker.record_gas_used(1);
+        assert!(tracker.is_detained_exceed(), "usage > detained_limit must be a detained exceed");
     }
 }
